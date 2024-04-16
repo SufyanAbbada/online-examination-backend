@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
+const { USER_ROLES } = require("../../constants");
 
 const userSchema = new Schema({
   name: {
@@ -44,10 +45,30 @@ const userSchema = new Schema({
         `${props.value} must contain alphabets, numbers and special characters!`,
     },
   },
+  role: {
+    type: String,
+    required: true,
+    default: "student",
+    validate: {
+      validator: function (v) {
+        return USER_ROLES.includes(v);
+      },
+      message: (props) =>
+        `${props.value} is not a valid role! Only "student", "teacher", or "admin" are allowed.`,
+    },
+  },
+  approved: {
+    type: Boolean,
+    default: false,
+  },
   verified: {
     type: Boolean,
     required: true,
     default: false,
+  },
+  expiresAt: {
+    type: Date,
+    expires: 1800,
   },
 });
 

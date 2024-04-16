@@ -2,14 +2,17 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-
-const User = require("../database/schemas/UserSchema");
+const existingUser = require("../middleware/users/existingUser");
+const tokenForEmailVerification = require("../helpers/tokenForEmailVerification");
+const { addEmailJobInEmailQueue } = require("../services/emailQueue");
 const {
   correctName,
   correctEmail,
   correctPassword,
+  correctRole,
 } = require("../middleware/users/userDataTest");
-const existingUser = require("../middleware/users/existingUser");
+
+const User = require("../database/schemas/UserSchema");
 
 const saltRounds = 10;
 
@@ -18,23 +21,46 @@ router.post(
   correctName,
   correctEmail,
   correctPassword,
+  correctRole,
   existingUser,
   async (req, res) => {
-    const { name, email, password } = req.body;
+    const { name, email, password, role } = req.body;
 
-    if (!req.existingUser) {
-      bcrypt
-        .hash(password, saltRounds)
-        .then((hash) => {
-          return User.create({ name, email, password: hash });
-        })
-        .then((newUser) => {
-          return res.status(200).json({ response: newUser });
+    try {
+      if (!req.existingUser) {
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+        const newUser = await User.create({
+          name,
+          email,
+          password: hashedPassword,
+          role,
+          expiresAt: role == "student" ? Date.now() : undefined,
+          approved: role === "student",
+          verified: role !== "student",
         });
-    } else {
-      return res
-        .status(409)
-        .json({ response: "User with this Email already exists" });
+
+        if (role === "student") {
+          await addEmailJobInEmailQueue({
+            receiver: newUser.email,
+            generatedToken: tokenForEmailVerification(newUser.email),
+          });
+
+          return res.status(200).json({
+            response: "You will receive a verification Email shortly.",
+          });
+        } else {
+          return res.status(200).json({
+            response: "Your request is sent to the Admin for Approval",
+          });
+        }
+      } else {
+        return res
+          .status(409)
+          .json({ response: "User with this Email already exists" });
+      }
+    } catch (error) {
+      return res.status(400).json({ response: error.message });
     }
   }
 );
@@ -49,19 +75,96 @@ router.post("/login", correctEmail, correctPassword, async (req, res) => {
         .status(404)
         .json({ response: "No User with this Email found in the System" });
 
+    if (user.expiresAt) {
+      return res.status(412).json({
+        response: "Verification is pending. Please verify to proceed to Login",
+      });
+    }
+
+    if (!user.approved) {
+      return res.status(412).json({
+        response:
+          "Approval from System Admin is Pending. Please sit tight as we hope it will be approved soon",
+      });
+    }
+
     const passwordCheck = await bcrypt.compare(password, user.password);
 
     if (!passwordCheck)
       return res.status(404).json({ response: "Incorrect Email or Password" });
 
-    if (user && passwordCheck) {
+    if (user && passwordCheck && !user.expiresAt && user.approved) {
       return res.status(200).json({
-        response: jwt.sign({ email: user.email }, process.env.JWT_SECRET_KEY),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        token: jwt.sign({ email: user.email }, process.env.JWT_SECRET_KEY),
       });
     }
   } catch (error) {
     return res.status(401).json({
       response: `Error '${error.message}' while entertaining your request`,
+    });
+  }
+});
+
+router.get("/verify", async (req, res) => {
+  const { token } = req.query;
+  try {
+    const verification = jwt.verify(token, process.env.JWT_SECRET_KEY);
+
+    if (verification.email) {
+      const userFound = await User.findOne({ email: verification.email });
+
+      if (userFound && userFound.expiresAt) {
+        userFound.expiresAt = undefined;
+        userFound.verified = true;
+        await userFound.save();
+
+        return res.status(201).json({
+          response: "Successfully persisted the user in the Database.",
+        });
+      } else {
+        return res.status(410).json({
+          response: "Looks like your token is expired or already been used",
+        });
+      }
+    }
+  } catch (error) {
+    return res.status(400).json({
+      response: `Error occurred while verifying the token "${error.message}"`,
+    });
+  }
+
+  res.send(token);
+});
+
+router.post("/approve", async (req, res) => {});
+
+router.get("/awaiting-approval", async (req, res) => {
+  const { token } = req.headers;
+  if (!token)
+    return res.status(412).json({
+      response: "Token Verification failed",
+    });
+  try {
+    const admin = await User.findOne({
+      email: jwt.verify(token, process.env.JWT_SECRET_KEY).email,
+    });
+    if (admin.role === "admin") {
+      return res.status(412).json({
+        response: await User.find({ approved: false }).select(
+          "id name email role"
+        ),
+      });
+    } else {
+      return res.status(412).json({
+        response: "You are not authorized to perform this action",
+      });
+    }
+  } catch (error) {
+    return res.status(417).json({
+      response: "Token Verification failed",
     });
   }
 });
@@ -89,4 +192,23 @@ router.post("/decrypt", async (req, res) => {
   }
 });
 
+router.post("/test", async (req, res) => {
+  const { email, password, name, role } = req.body;
+  console.log(email);
+  console.log(role);
+
+  try {
+    const user = await User.create({
+      name: name,
+      email: email,
+      password: "$2b$10$op0X4SAz1G2ysgUet/ZbX.xwGuZRE4I7xlHcsG8fYjqZ5xWuw3/0K",
+      role: role,
+    });
+
+    console.log(user);
+    res.send(user);
+  } catch (e) {
+    res.send(e.message);
+  }
+});
 module.exports = router;

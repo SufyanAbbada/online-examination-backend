@@ -1,3 +1,5 @@
+const { USER_ROLES } = require("../../constants.js");
+
 const correctName = (req, res, next) => {
   const { name } = req.body;
   if (name.length < 3 || name.length > 40 || !name.match(/^[A-Za-z\s]+$/)) {
@@ -37,4 +39,14 @@ const correctPassword = (req, res, next) => {
   next();
 };
 
-module.exports = { correctName, correctEmail, correctPassword };
+const correctRole = (req, res, next) => {
+  const { role } = req.body;
+  if (role && !USER_ROLES.includes(role))
+    return res.status(400).json({
+      response: "User Role can only be 'Student', 'Teacher' or 'Admin'",
+    });
+
+  next();
+};
+
+module.exports = { correctName, correctEmail, correctPassword, correctRole };
