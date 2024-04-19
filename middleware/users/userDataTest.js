@@ -49,4 +49,19 @@ const correctRole = (req, res, next) => {
   next();
 };
 
-module.exports = { correctName, correctEmail, correctPassword, correctRole };
+const correctId = (req, res, next) => {
+  const { userId } = req.body;
+  if (userId.length !== 24 || !userId.match(/^[0-9a-f]+$/))
+    return res.status(412).json({
+      response: "Provided ID is incorrect",
+    });
+  else next();
+};
+
+module.exports = {
+  correctName,
+  correctEmail,
+  correctPassword,
+  correctRole,
+  correctId,
+};

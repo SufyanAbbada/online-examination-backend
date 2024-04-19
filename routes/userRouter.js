@@ -2,17 +2,21 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const User = require("../database/schemas/UserSchema");
 const existingUser = require("../middleware/users/existingUser");
 const tokenForEmailVerification = require("../helpers/tokenForEmailVerification");
 const { addEmailJobInEmailQueue } = require("../services/emailQueue");
+const {
+  checkTokenAvailability,
+  checkAdminRole,
+} = require("../middleware/users/checkToken.js");
 const {
   correctName,
   correctEmail,
   correctPassword,
   correctRole,
+  correctId,
 } = require("../middleware/users/userDataTest");
-
-const User = require("../database/schemas/UserSchema");
 
 const saltRounds = 10;
 
@@ -139,35 +143,40 @@ router.get("/verify", async (req, res) => {
   res.send(token);
 });
 
-router.post("/approve", async (req, res) => {});
-
-router.get("/awaiting-approval", async (req, res) => {
-  const { token } = req.headers;
-  if (!token)
-    return res.status(412).json({
-      response: "Token Verification failed",
-    });
-  try {
-    const admin = await User.findOne({
-      email: jwt.verify(token, process.env.JWT_SECRET_KEY).email,
-    });
-    if (admin.role === "admin") {
-      return res.status(412).json({
-        response: await User.find({ approved: false }).select(
-          "id name email role"
-        ),
-      });
+router.post(
+  "/approve",
+  checkTokenAvailability,
+  checkAdminRole,
+  correctId,
+  async (req, res) => {
+    const { userId, decision = false } = req.body;
+    const user = await User.findById(userId);
+    if (!decision) {
+      await User.deleteOne({ _id: userId });
+      return res
+        .status(204)
+        .json({ response: "User disapproved and removed from the system" });
     } else {
-      return res.status(412).json({
-        response: "You are not authorized to perform this action",
-      });
+      const user = await User.findById(userId);
+      user.approved = true;
+      await user.save();
+      return res.status(202).json({ response: "User approved" });
     }
-  } catch (error) {
-    return res.status(417).json({
-      response: "Token Verification failed",
+  }
+);
+
+router.get(
+  "/awaiting-approval",
+  checkTokenAvailability,
+  checkAdminRole,
+  async (req, res) => {
+    return res.status(200).json({
+      response: await User.find({ approved: false }).select(
+        "id name email role"
+      ),
     });
   }
-});
+);
 
 router.post("/decrypt", async (req, res) => {
   const { token } = req.body;
